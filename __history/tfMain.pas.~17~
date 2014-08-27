@@ -1,0 +1,703 @@
+unit tfMain;
+
+interface
+
+uses
+  Windows, Messages, SysUtils, Variants, Classes, Graphics, Controls, Forms,
+  Dialogs, StdCtrls, ComCtrls, ExtCtrls, Buttons;
+
+type
+  TMainForm = class(TForm)
+    OutMemo: TRichEdit;
+    Panel1: TPanel;
+    DataLabel: TLabel;
+    Button1: TButton;
+    GoButton: TButton;
+    GroupBox: TCheckBox;
+    RandBox: TCheckBox;
+    FixedBox: TLabeledEdit;
+    PropBox: TLabeledEdit;
+    OpenDialog1: TOpenDialog;
+    BitBtn1: TBitBtn;
+    BitBtn2: TBitBtn;
+    procedure FormCreate(Sender: TObject);
+    procedure FormClose(Sender: TObject; var Action: TCloseAction);
+    procedure Button1Click(Sender: TObject);
+    procedure GoButtonClick(Sender: TObject);
+    procedure BitBtn1Click(Sender: TObject);
+  private
+    { Private declarations }
+  public
+    { Public declarations }
+    nstuds : integer;
+    Effects,
+    Weights,
+    Variances{,
+    OtherVal} : array of double;
+  end;
+
+function N_Prob(z : double) : double;
+function cumnorm (x : double) : double;
+function t_prob_1(t,df : double) : double;
+function t_prob(t,df : double) : double;
+FUNCTION t_alpha(alpha, df : Double) : Double;
+FUNCTION betai(a,b,x: real): real;
+function invcumnorm(alpha : double) : double;
+FUNCTION betacf(a,b,x: real): real;
+FUNCTION gammln(xx: real): real;
+FUNCTION gammq(a,x: real): real;
+PROCEDURE gser(a,x: real; VAR gamser,gln: real);
+PROCEDURE gcf(a,x: real; VAR gammcf,gln: real);
+FUNCTION Chi2_alpha(alpha, df : Double) : Double;
+function Chi2_prob(x2,df : double) : double;
+FUNCTION N_alpha(alpha : Double) : Double;
+
+var
+  MainForm: TMainForm;
+
+implementation
+
+uses tfAbout;
+
+{$R *.dfm}
+
+FUNCTION N_alpha(alpha : Double) : Double;
+    {compute normal deviate corresponding to alpha (one tail)}
+CONST
+    c0 = 2.515517;
+    c1 = 0.802853;
+    c2 = 0.010328;
+    d1 = 1.432788;
+    d2 = 0.189269;
+    d3 = 0.001308;
+VAR
+    t : Double;
+    num, den : Double;
+BEGIN
+    if alpha = 0.5 then N_alpha := 0
+    else begin
+    if alpha < 0.5 then t := Sqrt(ln(1/Sqr(alpha)))
+    else t := Sqrt(ln(1/Sqr(1-alpha)));
+    num := c0+t*(c1+t*c2);
+    den := 1+t*(d1+t*(d2+t*d3));
+    if alpha<0.5 then N_alpha := t-num/den
+    else N_alpha := -(t-num/den);
+    end;
+END {N_alpha} ;
+
+function Chi2_prob(x2,df : double) : double;
+begin
+     result := gammq(0.5 * df,0.5 * x2)
+end;
+
+FUNCTION Chi2_alpha(alpha, df : Double) : Double;
+    {compute Chi2 such that Prob(x >= X2) is alpha}
+VAR
+    Guess, p, Step : Double;
+    Finished : Boolean;
+BEGIN
+    Guess := 0.5 * Sqr(N_alpha(alpha) + Sqrt(2.0*df - 1.0));
+    {refine}
+    Step := 1;
+    Finished := False;
+    REPEAT
+          p := Chi2_prob(Guess, df);
+          IF p < alpha THEN BEGIN
+             Guess := Guess - Step;
+          END ELSE BEGIN
+              Guess := Guess + Step;
+          END;
+          Step := Step / 2.0;
+          IF (Step < 0.0001) THEN Finished := True;
+    UNTIL Finished;
+    result := Guess;
+END;
+
+{----------gcf----------}
+PROCEDURE gcf(a,x: real; VAR gammcf,gln: real);
+LABEL 1;
+CONST
+   itmax=100;
+   eps=3.0e-7;
+VAR
+   n: integer;
+   gold,g,fac,b1,b0,anf,ana,an,a1,a0: real;
+BEGIN
+   gln := gammln(a);
+   g := 0.0;            // line added by MSR as a default 
+   gold := 0.0;
+   a0 := 1.0;
+   a1 := x;
+   b0 := 0.0;
+   b1 := 1.0;
+   fac := 1.0;
+   FOR n := 1 to itmax DO BEGIN
+      an := 1.0*n;
+      ana := an-a;
+      a0 := (a1+a0*ana)*fac;
+      b0 := (b1+b0*ana)*fac;
+      anf := an*fac;
+      a1 := x*a0+anf*a1;
+      b1 := x*b0+anf*b1;
+      IF (a1 <> 0.0) THEN BEGIN
+         fac := 1.0/a1;
+         g := b1*fac;
+         IF (abs((g-gold)/g) < eps) THEN GOTO 1;
+         gold := g
+      END;
+   END;
+   writeln('pause in GCF - a too large, itmax too small'); readln;
+1:   gammcf := exp(-x+a*ln(x)-gln)*g
+END;
+
+{----------gammq----------}
+FUNCTION gammq(a,x: real): real;
+VAR
+   gamser,gln: real;
+BEGIN
+   IF ((x < 0.0) OR (a <= 0.0)) THEN BEGIN
+      writeln('pause in GAMMQ - invalid arguments'); readln
+   END;
+   IF (x < a+1.0) THEN BEGIN
+      gser(a,x,gamser,gln);
+      gammq := 1.0-gamser
+   END ELSE BEGIN
+      gcf(a,x,gamser,gln);
+      gammq := gamser
+   END
+END;
+
+{----------gser----------}
+PROCEDURE gser(a,x: real; VAR gamser,gln: real);
+LABEL 1;
+CONST
+   itmax=100;
+   eps=3.0e-7;
+VAR
+   n: integer;
+   sum,del,ap: real;
+BEGIN
+   gln := gammln(a);
+   IF (x <= 0.0) THEN BEGIN
+      IF (x < 0.0) THEN BEGIN
+         writeln('pause in GSER - x less than 0'); readln
+      END;
+      gamser := 0.0
+   END ELSE BEGIN
+      ap := a;
+      sum := 1.0/a;
+      del := sum;
+      FOR n := 1 to itmax DO BEGIN
+         ap := ap+1.0;
+         del := del*x/ap;
+         sum := sum+del;
+         IF (abs(del) < abs(sum)*eps) THEN GOTO 1;
+      END;
+      writeln('pause in GSER - a too large, itmax too small'); readln;
+1:      gamser := sum*exp(-x+a*ln(x)-gln)
+   END;
+END;
+
+{----------BetaCF----------}
+FUNCTION betacf(a,b,x: real): real;
+LABEL 99;
+CONST
+   itmax = 100;
+   eps = 3.0e-7;
+VAR
+   tem,qap,qam,qab,em,d: real;
+   bz,bpp,bp,bm,az,app: real;
+   am,aold,ap: real;
+   m: integer;
+BEGIN
+   am := 1.0;
+   bm := 1.0;
+   az := 1.0;
+   qab := a+b;
+   qap := a+1.0;
+   qam := a-1.0;
+   bz := 1.0-qab*x/qap;
+   FOR m := 1 TO itmax DO BEGIN
+      em := m;
+      tem := em+em;
+      d := em*(b-m)*x/((qam+tem)*(a+tem));
+      ap := az+d*am;
+      bp := bz+d*bm;
+      d := -(a+em)*(qab+em)*x/((a+tem)*(qap+tem));
+      app := ap+d*az;
+      bpp := bp+d*bz;
+      aold := az;
+      am := ap/bpp;
+      bm := bp/bpp;
+      az := app/bpp;
+      bz := 1.0;
+      IF abs(az-aold) < eps*abs(az) THEN GOTO 99
+   END;
+   writeln('pause in BETACF');
+   writeln('a or b too big, or itmax too small');
+   readln;
+99:
+   betacf := az
+END;
+
+{----------Cumulative normal distribution----------}
+function cumnorm (x : double) : double;
+ { From Sokal and Rohlf, Statistical Tables, 1995 - Table A }
+const
+     p  =  0.2316419;
+     b1 =  0.319381530;
+     b2 = -0.356563782;
+     b3 =  1.781477937;
+     b4 = -1.821255978;
+     b5 =  1.330274429;
+var
+   t,area : double;
+begin
+     t := 1.0 / (1.0 + p * abs(x));
+     area := (1.0 / 2.0 - 1.0 / sqrt(2.0 * pi) * exp(-x * x / 2.0)
+          * t * (b1 + t * (b2 + t * (b3 + t * (b4 + t * b5)))));
+     if (x >= 0) then result := 0.5 + area
+     else result := 0.5 - area;
+end;
+
+{-----------Inverse Cumulative Normal Distribution----------}
+function invcumnorm(alpha : double) : double;
+{compute normal deviate corresponding to alpha (one tail)}
+const
+    c0 = 2.515517;
+    c1 = 0.802853;
+    c2 = 0.010328;
+    d1 = 1.432788;
+    d2 = 0.189269;
+    d3 = 0.001308;
+var
+    t, num, den : Double;
+begin
+    if alpha = 0.5 then result := 0.0
+    else begin
+         if alpha < 0.5 then t := Sqrt(ln(1.0 / Sqr(alpha)))
+         else t := Sqrt(ln(1.0 / Sqr(1.0 - alpha)));
+         num := c0 + t * (c1 + t * c2);
+         den := 1.0 + t * (d1 + t * (d2 + t * d3));
+         if alpha < 0.5 then result := t - num / den
+         else result := -(t - num / den);
+    end;
+end;
+
+{ Probability of a Z-score }
+function N_Prob(z : double) : double;
+begin
+     result := 2.0 * (1.0 - cumnorm(abs(z)));
+end;
+
+{-----Student's T value associated with a given alpha-----}
+FUNCTION t_alpha(alpha, df : Double) : Double;
+{two-tailed probs}
+VAR
+    Xp, Xp2, g1, g2, g3, g4, temp, Guess, Step, p : Double;
+    Finished : boolean;
+BEGIN
+    if alpha >= 1 then t_alpha := 0.0
+    else begin
+         Xp := abs(InvCumNorm(alpha / 2.0));
+         Xp2 := Sqr(Xp);
+         g1 := Xp * (Xp2 + 1.0) / 4.0;
+         g2 := (Xp * (3.0 + Xp2 * (5.0 * Xp2 + 16.0))) / 96.0;
+         g3 := (Xp * (-5.0 + Xp2 * (17.0 + Xp2 * (3.0 * Xp2 + 19.0)))) / 384.0;
+         g4 := (Xp * (-945.0 + Xp2 * (-1920.0 + Xp2 * (1482.0 + Xp2 * (77.0
+            + 79.0 * Xp2))))) / 92160.0;
+         temp := Xp+g1/df+g2/Sqr(df)+g3/(df*Sqr(df))+g4/Sqr(Sqr(df));
+         {if alpha<0.5 then guess := temp else guess := -temp;}
+         guess := temp;
+
+         {refine}
+         Step := guess * 5.0;
+         Finished := False;
+         REPEAT
+               p := t_prob(Guess, df);
+               IF p < alpha THEN BEGIN
+                  Guess := Guess-Step;
+                  if guess < 0 then guess := 0.0;
+               END ELSE BEGIN
+                   Guess := Guess + Step;
+               END;
+               Step := Step / 2.0;
+               IF Step < 0.0001 THEN Finished := True;
+         UNTIL Finished;
+         t_alpha := guess;
+    end;
+END;
+
+FUNCTION t_prob(t, df : Double) : Double;
+{2 tailed t prob}
+VAR
+    a, b, x : Double;
+BEGIN
+    if (t <> 0) and (df > 0) then begin
+       a := df / 2.0;
+       b := 0.5;
+       x := df / (df + Sqr(t));
+       t_prob := betai(a, b, x);
+    end else t_prob := 1.0;
+END {tprob} ;
+
+function t_prob_1(t,df : double) : double;
+var
+   P : double;
+begin
+     p := t_prob(t,df) / 2.0;
+     if (t > 0) then result := 1.0 - p
+     else result := p;
+end;
+
+{----------gammln----------}
+FUNCTION gammln(xx: real): real;
+CONST
+   stp = 2.50662827465;
+   half = 0.5;
+   one = 1.0;
+   fpf = 5.5;
+VAR
+   x,tmp,ser: double;
+   j: integer;
+   cof: ARRAY [1..6] OF double;
+BEGIN
+   cof[1] := 76.18009173;
+   cof[2] := -86.50532033;
+   cof[3] := 24.01409822;
+   cof[4] := -1.231739516;
+   cof[5] := 0.120858003e-2;
+   cof[6] := -0.536382e-5;
+   x := xx-one;
+   tmp := x+fpf;
+   tmp := (x+half)*ln(tmp)-tmp;
+   ser := one;
+   FOR j := 1 to 6 DO BEGIN
+      x := x+one;
+      ser := ser+cof[j]/x
+   END;
+   gammln := tmp+ln(stp*ser)
+END;
+
+{----------Beta I routine-----------}
+FUNCTION betai(a,b,x: real): real;
+VAR
+   bt: real;
+BEGIN
+   IF (x < 0.0) OR (x > 1.0) THEN BEGIN
+      writeln('pause in routine BETAI');
+      readln
+   END;
+   IF (x = 0.0) OR (x = 1.0) THEN bt := 0.0
+   ELSE bt := exp(gammln(a+b)-gammln(a)-gammln(b)
+      +a*ln(x)+b*ln(1.0-x));
+   IF x < (a+1.0)/(a+b+2.0) THEN
+      betai := bt*betacf(a,b,x)/a
+   ELSE
+      betai := 1.0-bt*betacf(b,a,1.0-x)/b;
+END;
+
+procedure TMainForm.FormCreate(Sender: TObject);
+begin
+     nstuds := 0;
+     Effects := nil;
+     Weights := nil;
+     Variances := nil;
+     //OtherVals := nil;
+end;
+
+procedure TMainForm.FormClose(Sender: TObject; var Action: TCloseAction);
+begin
+     Effects := nil;
+     Weights := nil;
+     Variances := nil;
+     //OtherVals := nil;
+end;
+
+procedure TMainForm.Button1Click(Sender: TObject);
+var
+   infile : TextFile;
+   templist : TStringList;
+   //templist : TWideStringList;
+   i : integer;
+   IsGood : boolean;
+begin
+     if OpenDialog1.Execute then begin
+        IsGood := true;
+        templist := TStringList.Create;
+        //templist := TWideStringList.Create;
+        templist.LoadFromFile(OpenDialog1.FileName);
+        nstuds := templist.Count - 1;
+        templist.free;
+        effects := nil;
+        variances := nil;
+        weights := nil;
+        Setlength(effects,nstuds);
+        SetLength(variances,nstuds);
+        //SetLength(OtherVals,nstuds);
+        SetLength(Weights,nstuds);
+        try
+           AssignFile(infile,OpenDialog1.FileName); Reset(infile);
+           // read header
+           readln(infile);
+           try
+              for i := 0 to nstuds - 1 do if IsGood then begin
+                  readln(infile,effects[i],variances[i]{,OtherVals[i]});
+                  try
+                     Weights[i] := 1.0 / Variances[i];
+                  except on EDivbyZero do begin
+                            MessageDlg('You cannot have studies with a variance of zero.',
+                              mtError,[mbOk],0);
+                            IsGood := false;
+                         end;
+                  end;
+              end;
+           except on Exception do begin
+                     MessageDlg('Error reading values from '+OpenDialog1.FileName+'.',
+                        mtError,[mbOk],0);
+                     IsGood := false;
+                  end;
+           end;
+        finally
+               Closefile(infile);
+        end;
+        if IsGood then begin
+           DataLabel.Caption := ExtractFileName(OpenDialog1.Filename) + ': ' + IntToStr(nstuds) + ' studies';
+           GoButton.Enabled := true;
+        end;
+     end;
+end;
+
+procedure TMainForm.GoButtonClick(Sender: TObject);
+const
+     alpha = 0.05;
+     orwinf = 0.2;
+var
+   fixn,
+   ngrps,nit,
+   i,j : integer;
+   RelSize,
+   df,
+   Qb,X2,Qt,
+   RosenthalK,{OrwinK,}tempk,
+   MSRK1,MSRKstar,MSRKnorm,MSRKg,
+   SumZ,ts,s2pool,s2poolf,
+   sumW,SumWE,SumW2,SumWR,
+   grandvar,randmean,
+   grandmean : double;
+   RandWF,
+   RandW,GrpSumW2,
+   GrpMeans,GrpSumW : array of double;
+   IsDone : boolean;
+begin
+     FixN := StrToInt(FixedBox.Text);
+     RelSize := StrToFloat(PropBox.Text);
+     GrpMeans := nil; GrpSumW := nil; GrpSumW2 := nil; RandW := nil; RandWF := nil;
+     grandmean := 0.0; SumW := 0.0; SumW2 := 0.0; ngrps := 0;
+     for i := 0 to nstuds - 1 do begin
+         SumW := SumW + Weights[i];
+         SumW2 := SumW2 + sqr(Weights[i]);
+         GrandMean := GrandMean + Weights[i] * Effects[i];
+     end;
+     GrandMean := GrandMean / SumW;
+     GrandVar := 1.0 / SumW;
+     OutMemo.Lines.Add(OpenDialog1.FileName);
+     OutMemo.Lines.Add(IntToStr(nstuds) + ' studies');
+     OutMemo.Lines.Add('');
+     OutMemo.Lines.Add('Fixed-Effects Model');
+     OutMemo.Lines.AdD('-------------------');
+     OutMemo.Lines.Add('Grand Mean = ' + format('%1.8f',[GrandMean]));
+     OutMemo.Lines.Add('Grand Variance = ' + format('%1.8f',[GrandVar]));
+     OutMemo.Lines.Add('');
+     OutMemo.Lines.Add('Tests for difference from zero');
+     ts := GrandMean / sqrt(GrandVar);
+     OutMemo.Lines.Add('  t-score = ' + format('%1.8f',[ts]));
+     OutMemo.Lines.Add('  Prob(Normal) = ' + format('%1.8f',[N_Prob(ts)]));
+     OutMemo.Lines.Add('  Prob(t) = ' + format('%1.8f',[t_Prob(nstuds-1.0,ts)]));
+     OutMemo.Lines.Add('');
+     OutMemo.Lines.Add('Basic FailSafe Numbers');
+     // Rosenthal FailSafe
+     SumZ := 0.0;
+     for i := 0 to nstuds - 1 do SumZ := SumZ + Effects[i] / sqrt(1.0 / Weights[i]);
+     RosenthalK := sqr(SumZ) / sqr(InvCumNorm(alpha)) - nstuds;
+     if (RosenthalK < 0) then RosenthalK := 0.0;
+     //if (trunc(k0) = k0) then k0 := trunc(k0) else k0 := trunc(k0) + 1.0;
+     OutMemo.Lines.Add('  Rosenthal ('+format('%1.3f',[alpha])+') = ' + format('%1.8f',[RosenthalK]));
+     // Orwin FailSafe
+     //OrwinK := nstuds * (abs(GrandMean) - OrwinF) / OrwinF;
+     //if (OrwinK < 0) then OrwinK := 0.0;
+     //if (trunc(k0) = k0) then k0 := trunc(k0) else k0 := trunc(k0) + 1.0;
+     //OutMemo.Lines.Add('  Orwin ('+format('%1.3f',[orwinf])+') = ' + format('%1.8f',[OrwinK]));
+     // My FailSafe
+     SumWE := 0.0;
+     for i := 0 to nstuds - 1 do
+         SumWE := SumWE + Effects[i] * Weights[i];
+     { Allowing the normal distribution }
+     MSRKnorm := (nstuds / SumW) * (sqr(SumWE) / sqr(InvCumNorm(alpha)) - SumW);
+     if (MSRKnorm < 0) then MSRKnorm := 0.0;
+     //if (trunc(k0) = k0) then k0 := trunc(k0) else k0 := trunc(k0) + 1.0;
+     OutMemo.Lines.Add('  Rosenberg Normal ('+format('%1.3f',[alpha])+') = ' + format('%1.8f',[MSRKnorm]));
+     { Calculate with the assumption that you are only
+       adding FixN studies with k0 times the mean weight }
+     MSRK1 := (nstuds / SumW) * (sqr(SumWE) / sqr(t_alpha(alpha,nstuds - 1.0 + FixN)) - SumW);
+     MSRK1 := MSRK1 / FixN;
+     if (MSRK1 < 0) then MSRK1 := 0.0;
+     //if (trunc(k0) = k0) then k0 := trunc(k0) else k0 := trunc(k0) + 1.0;
+     OutMemo.Lines.Add('  Rosenberg t-N'+IntToStr(FixN)+' ('+format('%1.3f',[alpha])+') = ' + format('%1.8f',[MSRK1]));
+     { Calculate with the assumption that you are adding
+       k0 multiple studies of mean weight }
+     MSRKstar := 1.0; nit := 0;
+     repeat
+           inc(nit);
+           //df := round(nstuds + k0 - 1.0);
+           df := nstuds + MSRKstar - 1.0;
+           MSRKstar := ((nstuds/SumW)/RelSize)*(sqr(SumWE) / sqr(t_alpha(Alpha,df)) - SumW);
+     until (round(MSRKstar) = round(df + 1.0 - nstuds));
+     if (MSRKstar < 0) then MSRKstar := 0.0;
+     {OutMemo.Lines.Add('  Rosenberg t-N+('+format('%1g',[RelSize])+' weight) ('+format('%1.3f',[alpha])+') = ' + format('%1.8f',[MSRKstar])
+         + '  ['+IntToStr(nit)+' iterations]');}
+     OutMemo.Lines.Add('  Rosenberg t-N+ ('+format('%1.3f',[alpha])+') = ' + format('%1.8f',[MSRKstar])
+         + '  ['+IntToStr(nit)+' iterations]');
+     OutMemo.Lines.Add('');
+     // random effects models
+     if RandBox.Checked then begin
+        OutMemo.Lines.Add('Random-Effects Model');
+        OutMemo.Lines.Add('--------------------');
+        SetLength(RandW,nstuds);
+        SetLength(RandWF,nstuds);
+        Qt := 0.0;
+        for i := 0 to nstuds - 1 do
+            Qt := Qt + Weights[i] * sqr(Effects[i] - GrandMean);
+        s2pool := (Qt - (nstuds - 1.0))/(SumW - SumW2 / SumW);
+        if (s2pool > 0.0) then begin
+           for i := 0 to nstuds - 1 do
+               RandW[i] := 1.0 / (Variances[i] + s2pool);
+           randmean := 0.0; SumWR := 0.0;
+           for i := 0 to nstuds - 1 do begin
+               SumWR := SumWR + RandW[i];
+               randMean := randMean + RandW[i] * Effects[i];
+           end;
+           randMean := randMean / SumWR;
+           GrandVar := 1.0 / SumWR;
+           OutMemo.Lines.Add('Grand Mean = ' + format('%1.8f',[randMean]));
+           OutMemo.Lines.Add('Grand Variance = ' + format('%1.8f',[GrandVar]));
+           OutMemo.Lines.Add('Tests for difference from zero');
+           ts := randMean / sqrt(GrandVar);
+           OutMemo.Lines.Add('  t-score = ' + format('%1.8f',[ts]));
+           OutMemo.Lines.Add('  Prob(Normal) = ' + format('%1.8f',[N_Prob(ts)]));
+           OutMemo.Lines.Add('  Prob(t) = ' + format('%1.8f',[t_Prob(nstuds-1.0,ts)]));
+           OutMemo.Lines.Add('');
+               OutMemo.Lines.Add('Random Effects FailSafe Numbers');
+               // My FailSafe - One Study!!!
+               // initial k0
+               SumWE := 0.0;
+               for i := 0 to nstuds - 1 do
+                   SumWE := SumWE + Effects[i] * RandW[i];
+               //MSRK1 := (nstuds / SumW) * (sqr(SumWE) / sqr(t_alpha(alpha,nstuds)) - SumWR);
+               MSRK1 := (sqr(SumWE) / sqr(t_alpha(alpha,nstuds)) - SumWR);
+               if (MSRK1 < 0) then MSRK1 := 0.0;
+               IsDone := false; nit := 0;
+               repeat
+                     inc(nit);
+                     // recalc Fixed Qt with FixN extra studies
+                     randmean := (SumW * GrandMean) / (SumW + MSRK1);
+                     Qt := 0.0;
+                     for i := 0 to nstuds - 1 do
+                         Qt := Qt + Weights[i] * sqr(Effects[i] - randmean);
+                     SumWE := 0.0;
+                     for i := 1 to FixN do begin
+                         Qt := Qt + (MSRK1/FixN) * sqr(randmean);
+                         SumWE := SumWE + sqr(MSRK1/FixN);
+                     end;
+                     // recalc s2pooled
+                     s2poolf := (Qt - (nstuds - 1.0 + FixN)) /
+                                (SumW + MSRK1 - ((SumW2 + SumWE) / (SumW + MSRK1)));
+                     if (s2poolf > 0) then begin
+                        SumWE := 0.0; SumWR := 0.0;
+                        for i := 0 to nstuds - 1 do begin
+                            RandWF[i] := 1.0 / (Variances[i] + s2poolf);
+                            SumWE := SumWE + Effects[i] * RandWF[i];
+                            SumWR := SumWR + RandWF[i];
+                        end;
+                        tempK := (sqr(SumWE) / sqr(t_alpha(alpha,nstuds - 1.0 + FixN)) - SumWR);
+                        if (round(tempK) = round(MSRK1)) then IsDone := true
+                        else MSRK1 := tempK;
+                     end else IsDone := true;
+               until IsDone;
+               MSRK1 := MSRK1 * (nstuds / SumW) / FixN;
+               if (MSRk1 < 0) then MSRk1 := 0.0;
+               if (s2poolf > 0) then
+                  OutMemo.Lines.Add('  Rosenberg t-N'+IntToStr(FixN)+' ('+format('%1.3f',[alpha])+') = ' + format('%1.8f',[MSRk1])
+                     + '  ['+IntToStr(nit)+' iterations]')
+               else OutMemo.Lines.Add('  Rosenberg t-N'+IntToStr(FixN)+' ('+format('%1.3f',[alpha])+') collapses to fixed-effects model');
+               // My FailSafe - Multiple Studies of Effect = 0
+               // initial k0
+               SumWE := 0.0;
+
+               for i := 0 to nstuds - 1 do
+                   SumWE := SumWE + Effects[i] * RandW[i];
+               MSRKstar := (sqr(SumWE) / sqr(t_alpha(alpha,nstuds)) - SumWR);
+               if (MSRKstar < 0) then MSRKstar := 0.0;
+               IsDone := false; nit := 0;
+               repeat
+                     inc(nit);
+                     // recalc Fixed Qt with extra study
+                     randmean := (SumW * GrandMean) / (SumW + MSRKstar);
+                     Qt := 0.0;
+                     for i := 0 to nstuds - 1 do
+                         Qt := Qt + Weights[i] * sqr(Effects[i] - randmean);
+                     j := round(MSRKstar * nstuds / SumW);
+                     SumWE := 0.0;
+                     for i := 1 to j do begin
+                         Qt := Qt + (SumW/nstuds) * sqr(randmean);
+                         SumWE := SumWE + sqr(SumW/nstuds);
+                     end;
+                     // recalc s2pooled
+                     s2poolf := (Qt - (nstuds - 1.0 + j)) /
+                                (SumW + MSRKstar - ((SumW2 + SumWE) / (SumW + MSRKstar)));
+                     if (s2poolf > 0) then begin
+                        SumWE := 0.0; SumWR := 0.0;
+                        for i := 0 to nstuds - 1 do begin
+                            RandWF[i] := 1.0 / (Variances[i] + s2poolf);
+                            SumWE := SumWE + Effects[i] * RandWF[i];
+                            SumWR := SumWR + RandWF[i];
+                        end;
+                        //tempK := (nstuds / SumW) * (sqr(SumWE) / sqr(t_alpha(alpha,nstuds)) - SumWR);
+                        tempK := (sqr(SumWE) / sqr(t_alpha(alpha,nstuds - 1.0 + j)) - SumWR);
+                        i := round(tempK * nstuds / SumW);
+                        if (i = j) then IsDone := true
+                        else MSRKstar := tempK;
+                     end else IsDone := true;
+               until IsDone;
+               MSRKstar := MSRKstar * (nstuds / SumW) / Relsize;
+               if (MSRkstar < 0) then MSRkstar := 0.0;
+
+               if (s2poolf > 0) then
+                  OutMemo.Lines.Add('  Rosenberg t-N+ ('+format('%1.3f',[alpha])+') = ' + format('%1.8f',[MSRkstar])
+                     + '  ['+IntToStr(nit)+' iterations]')
+               else OutMemo.Lines.Add('  Rosenberg t-N+ ('+format('%1.3f',[alpha])+') collapses to fixed-effects model'
+                     + '  ['+IntToStr(nit)+' iterations]');
+               {if (s2poolf > 0) then
+                  OutMemo.Lines.Add('  Rosenberg t-N+('+format('%1g',[RelSize])+' weight) ('+format('%1.3f',[alpha])+') = ' + format('%1.8f',[MSRkstar])
+                     + '  ['+IntToStr(nit)+' iterations]')
+               else OutMemo.Lines.Add('  Rosenberg t-N+('+format('%1g',[RelSize])+' weight) ('+format('%1.3f',[alpha])+') collapses to fixed-effects model'
+                     + '  ['+IntToStr(nit)+' iterations]');}
+               OutMemo.Lines.Add('');
+        end else begin
+            OutMemo.Lines.Add('s2pooled equal to zero');
+            OutMemo.Lines.Add('');
+        end;
+     end;
+     GrpMeans := nil; GrpSumW := nil; GrpSumW2 := nil; RandW := nil; RandWF := nil;
+end;
+
+procedure TMainForm.BitBtn1Click(Sender: TObject);
+begin
+     try
+        AboutForm := TAboutForm.Create(Self);
+        AboutForm.ShowModal;
+     finally
+     end;
+end;
+
+end.

@@ -1,0 +1,14 @@
+program FailSafeNumberCalculator;
+
+uses
+  Forms,
+  tf1 in 'tf1.pas' {MainForm},
+  tfAbout in 'tfAbout.pas' {AboutForm};
+
+{$R *.res}
+
+begin
+  Application.Initialize;
+  Application.CreateForm(TMainForm, MainForm);
+  Application.Run;
+end.
